@@ -119,21 +119,16 @@ def snek_update(frameNum,img,x,y):
 
     # boundaries
     if new_a < 0 or new_b < 0:
-        print("Woops!")
-        print("Final score is {}".format(score))
-        quit()
+        get_score()
 
     if new_a > x-1 or new_b > y-1:
-        print("Woops!")
-        print("Final score is {}".format(score))
-        quit()
+        get_score()
+
 
     # collision detection
     for pt in range(len(new_snek)-1):
         if new_snek[0] == new_snek[pt+1]:
-            print("Woops!")
-            print("Final score is {}".format(score))
-            quit()
+            get_score()
 
     # move snek and find food
     if new_field[new_a,new_b] == 2:
@@ -149,9 +144,8 @@ def snek_update(frameNum,img,x,y):
 
     moves = moves - 1
     if moves == 0:
-        print("Dead!")
-        print("Final score is {}".format(score))
-        quit()
+        get_score()
+
 
     # draw snek
     for pt in new_snek:
@@ -171,7 +165,7 @@ def snek_update(frameNum,img,x,y):
     score_label.set_text(score)
     moves_label.set_text(moves)
 
-    return img,direction,field,a,b,snek,food,
+    return img,direction,field,a,b,snek,food,score,
 
 
 def main():
@@ -198,7 +192,7 @@ def main():
     if args.interval:
         updateInterval = int(args.interval)
 
-    global score_label, moves_label
+    global score_label, moves_label, fig
 
     # set up animation
     fig, ax = plt.subplots()
@@ -218,5 +212,25 @@ def main():
 
     plt.show()
 
+
+def get_score():
+    global score, fig
+    print("Woops!")
+    print("Final score is {}".format(score))
+
+    # dump score value
+    save = open(r'C:\Users\bryce\Desktop\projects\snek_NNs/score_dump.txt', 'w')
+
+    save.write("{}".format(score))
+    save.close()
+
+    get_score = open(r'C:\Users\bryce\Desktop\projects\snek_NNs/score_dump.txt', 'r')
+    score = get_score.read()
+    print(score)
+    get_score.close()
+
+    print('test')
+
+    plt.close()  # need to figure out how to quit the animation but allow the program to run again
 
 main()
