@@ -49,7 +49,7 @@ def food_add(x, y, snek):
 def update(net):
     global field, snek, a, b, food, score, moves, num_layers
 
-    biases, weights = net[0], net[1]
+    biases, weights, seg_weights = net[0], net[1], net[2]
 
     x = 20
     y = 20
@@ -73,7 +73,7 @@ def update(net):
         steps += 1
 
         # get direction input
-        new_direction = get_input(x, y, new_field, new_snek, new_food, direction, biases, weights)
+        new_direction = get_input(x, y, new_field, new_snek, new_food, direction, biases, weights, seg_weights)
 
         # movement
         if new_direction == 0:  # left
@@ -134,7 +134,7 @@ def update(net):
         food = new_food
 
 
-def get_input(x, y, field, snek, food, direction, biases, weights):
+def get_input(x, y, field, snek, food, direction, biases, weights, seg_weights):
     global num_layers
 
     # look in 8 directions from head of snek
@@ -243,7 +243,7 @@ def get_input(x, y, field, snek, food, direction, biases, weights):
     vec_food[1] = (b - fy) / field_norm
 
     # get activations for segregated neurons
-    activations = np.append(activations, vec_food)
+    seg_activations = np.append(seg_activations, vec_food)
 
     # get direction activations
     vec_direction = np.zeros((4, 1))
@@ -252,6 +252,7 @@ def get_input(x, y, field, snek, food, direction, biases, weights):
 
     # make activations (20,1) and segregated input layer (2,1)
     activations = activations[..., np.newaxis]
+    seg_activations = seg_activations[..., np.newaxis]
 
     # process activations through neural network
     process = [activations]
@@ -262,9 +263,16 @@ def get_input(x, y, field, snek, food, direction, biases, weights):
         activations = sigmoid(z)
         process.append(activations)
 
+    # process segregated activations
+    seg_process = [seg_activations]
+    z = np.dot(seg_weights, seg_activations) + biases[-1]
+    zs.append(z)
+    seg_activations = sigmoid(z)
+    seg_process.append(seg_activations)
+
 
     # final activation layer values
-    final_act = process[-1]
+    final_act = process[-1] + seg_process[-1]
     # get index of max value
     new_direction = np.argmax(final_act)
 
@@ -274,14 +282,15 @@ def get_input(x, y, field, snek, food, direction, biases, weights):
 def create_network(layers):  # pass list object
     # activation layer needs to be 28
     # output layer needs to be 4
-    global num_layers, biases, weights
+    global num_layers, biases, weights, seg_weights
 
     # layers = [20,12,12,4]
     num_layers = len(layers)
     biases = [np.random.randn(y, 1) for y in layers[1:]]
     weights = [np.random.randn(y, x) for x, y in zip(layers[:-1], layers[1:])]
+    seg_weights = [np.random.randn(4, 2)]
 
-    return (biases, weights)
+    return (biases, weights, seg_weights)
 
 
 def sigmoid(z):
@@ -293,25 +302,29 @@ def snakes(individuals, network, elites, fitness_stack, optimum, gen):
     # new list to save all children which are then evaluated by non-dominated selection
     new = []
 
-    @parfor(range(individuals), (elites,))
-    def mutator(individuals, elites):
+    # get mutation rate and mutation degree
+    mut_rate = random.randint(0, 10)
+    mut_degree = random.uniform(0, 1)
+
+    @parfor(range(individuals), (elites, mut_rate, mut_degree,))
+    def mutator(individuals, elites, mut_rate, mut_degree):
         global new
         # for n in range(individuals):
         if gen == 0:
             net = create_network(network)
-            biases, weights = net[0], net[1]
+            biases, weights, seg_weights = net[0], net[1], net[2]
             score, steps = update(net)
             # fit = fit_calc(score, steps)
         else:
             dist = np.random.poisson(3, len(elites))
-            offspring = mutate_parent(random.choices(elites, weights=dist), random.choices(elites, weights=dist))
-            biases, weights = offspring[0], offspring[1]
+            offspring = mutate_parent(random.choices(elites, weights=dist), random.choices(elites, weights=dist), mut_rate, mut_degree)
+            biases, weights, seg_weights = offspring[0], offspring[1], offspring[2]
             score, steps = update(offspring)
             # fit = fit_calc(score, steps)
 
         # non-dominated sorting implementation
         # first gather all individuals together
-        return [[biases, weights], [score, steps]]
+        return [[biases, weights, seg_weights], [score, steps]]
         # new.append([[biases, weights, seg_weights], [score, steps]])
     new = mutator
 
@@ -349,7 +362,7 @@ def snakes(individuals, network, elites, fitness_stack, optimum, gen):
         undom_indices.append(list(pts_indices)[0][i])
 
     elites = []
-    if len(undom_indices) > 1:
+    if len(undom_indices) > 2:
         for x in range(len(undom_indices)):
             elites.append([elite_phens[undom_indices[x]], elite_fits[undom_indices[x]]])
     else:
@@ -380,24 +393,26 @@ def snakes(individuals, network, elites, fitness_stack, optimum, gen):
         opt_pairs.append(elites[r][1])
         r += 1
 
+    print("Mutation rate is {}".format(mut_rate))
+    print("Mutation degree is {}".format(mut_degree))
     print("Sample of optimum decompositions {}".format(opt_pairs))
     print("Number of elites: {}".format(len(elites)))
 
     return optimum, elites, fitness_stack
 
 
-def mutate_parent(parent1, parent2):
+def mutate_parent(parent1, parent2, mut_rate, mut_degree):
     parent1 = parent1[0]
     parent2 = parent2[0]
     # crossover
     biases1 = parent1[0][0]
     weights1 = parent1[0][1]
+    seg_weights1 = parent1[0][2]
 
     biases2 = parent2[0][0]
     weights2 = parent2[0][1]
+    seg_weights2 = parent2[0][2]
 
-    # mutation rate increases with redundant outcomes
-    mut_rate = 10
 
     # mutate biases 1 by 1
     for f in range(len(biases1)):
@@ -406,9 +421,9 @@ def mutate_parent(parent1, parent2):
                 biases1[f][x] = biases2[f][x]
             # mutate
             if random.randint(0, 100) < mut_rate:
-                # n_max = min(1.25 * biases1[f][x], 1.0)
-                # n = random.uniform(.75 * biases1[f][x], n_max)
-                n = random.uniform(0,1)
+                n_max = min((1+mut_degree) * biases1[f][x], 1.0)
+                n_min = max(0, biases1[f][x] * (1-mut_degree))
+                n = random.uniform(n_min, n_max)
                 biases1[f][x] = n
 
     # mutate weights
@@ -419,12 +434,26 @@ def mutate_parent(parent1, parent2):
                     weights1[f][x][s] = weights2[f][x][s]
                 # mutate
                 if random.randint(0, 100) < mut_rate:
-                    # n_max = min(1.25 * weights1[f][x][s], 1.0)
-                    # n = random.uniform(.75 * weights1[f][x][s], n_max)
-                    n = random.uniform(0, 1)
+                    n_max = min((1+mut_degree) * weights1[f][x][s], 1.0)
+                    n_min = max(0, weights1[f][x][s] * (1-mut_degree))
+                    n = random.uniform(n_min, n_max)
                     weights1[f][x][s] = n
 
-    return biases1, weights1
+    # mutate seg_weights
+    for f in range(len(seg_weights1)):
+        for x in range(len(seg_weights1[f])):
+            for s in range(len(seg_weights1[f][x])):
+                if random.randint(0, 100) < 50:
+                    seg_weights1[f][x][s] = seg_weights2[f][x][s]
+                # mutate
+                if random.randint(0, 100) < mut_rate:
+                    n_max = min(1.25 * seg_weights1[f][x][s], 1.0)
+                    n_min = max(0, seg_weights1[f][x][s] * (1-mut_degree))
+                    n = random.uniform(n_min, n_max)
+                    seg_weights1[f][x][s] = n
+
+
+    return biases1, weights1, seg_weights1
 
 
 def prob_dist(elites):
@@ -448,7 +477,7 @@ def fit_calc(score, steps):
 
 def genetic_selector(individuals, generations):
     gen = 0
-    network = [22, 16, 16, 4]
+    network = [20, 16, 16, 4]
     elites = []
     fitness_stack = []
     optimum = 0
