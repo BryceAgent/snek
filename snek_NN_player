@@ -1,0 +1,467 @@
+# a genetic algorithm to train a neural network to play snake
+import numpy as np
+import random
+from random import randint
+from parfor import parfor
+
+
+def field_maker(x, y):
+    global field, snek, direction, a, b, food, moves, score
+
+    # create field
+    field = np.array([])
+    field = np.zeros(shape=(x, y))
+    a = randint(3, x - 3)
+    b = randint(3, y - 3)
+
+    # snek
+    snek = []
+    field[a, b] = 1
+    snek = [[a, b]]
+
+    # initialize direction
+    direction = randint(0, 3)
+
+    food = food_add(x, y, snek)
+    field[food[0], food[1]] = 2
+
+    moves = 100
+    score = 0
+
+    return field, snek, direction, a, b, food
+
+
+def food_add(x, y, snek):
+    global food
+
+    fx = randint(0, x - 1)
+    fy = randint(0, y - 1)
+
+    for pt in snek:
+        if fx == pt[0] and fy == pt[1]:
+            food_add(x, y, snek)
+
+    food = [fx, fy]
+
+    return food
+
+
+def update(net):
+    global field, snek, a, b, food, score, moves, num_layers
+
+    biases, weights = net[0], net[1]
+
+    x = 20
+    y = 20
+
+    field, snek, direction, a, b, food = field_maker(x, y)
+
+    moves = 200
+    steps = 0
+    score = 0
+
+    alive = True
+
+    while alive == True:
+        new_field = field.copy()
+        new_snek = snek.copy()
+        new_direction = direction
+        new_a = a
+        new_b = b
+        new_food = food
+
+        steps += 1
+
+        # get direction input
+        new_direction = get_input(x, y, new_field, new_snek, new_food, direction, biases, weights)
+
+        # movement
+        if new_direction == 0:  # left
+            new_b -= 1
+        if new_direction == 1:  # up
+            new_a -= 1
+        if new_direction == 2:  # right
+            new_b += 1
+        if new_direction == 3:  # down
+            new_a += 1
+
+        # boundaries
+        if new_a < 0 or new_b < 0:
+            alive = False
+            return score, steps
+
+        if new_a > x - 1 or new_b > y - 1:
+            alive = False
+            return score, steps
+
+        # collision detection
+        for pt in range(len(new_snek) - 1):
+            if new_snek[0] == new_snek[pt + 1]:
+                alive = False
+                return score, steps
+
+        # move snek and find food
+        if new_field[new_a, new_b] == 2:
+            new_snek = [[new_a, new_b]] + new_snek
+            new_field[new_a, new_b] = 1
+            new_food = food_add(x, y, new_snek)
+            score += 500
+            moves += 100
+            if moves > 500:
+                moves = 500
+        else:
+            new_snek = [[new_a, new_b]] + new_snek
+            new_field[new_snek[-1][0], new_snek[-1][1]] = 0
+            del new_snek[-1]
+
+            # draw snek
+        for pt in new_snek:
+            new_field[pt[0], pt[1]] = 1
+
+        new_field[new_food[0], new_food[1]] = 2
+
+        moves = moves - 1
+        if moves == 0:
+            alive = False
+            return score, steps
+
+        # update data
+        field[:] = new_field[:]
+        snek[:] = new_snek[:]
+        a = new_a
+        b = new_b
+        direction = new_direction
+        food = new_food
+
+
+def get_input(x, y, field, snek, food, direction, biases, weights):
+    global num_layers
+
+    # look in 8 directions from head of snek
+    # get 4 values: distance to boundaries, distance to snek, and distance to food, and direction
+    # pass in 4 values as list to neural network activation layer e.g. [4,0,0,1,0,1,etc]
+    # finally get output as direction
+    # create activations array
+    activations = np.array([])
+    seg_activations = np.array([])
+    # normalize per field size
+    field_norm = len(field[0]) + len(field[1])
+
+    # calculate distances from head
+    head = snek[0]
+
+    # distance to boundaries N, NE, E, SE, S, SW, W, NW
+    vec_boundaries = np.zeros((8, 1))
+    vec_boundaries[0] = head[0] / field_norm  # N
+    vec_boundaries[1] = min(head[0], y - head[1] - 1) / field_norm  # NE
+    vec_boundaries[2] = (y - head[1] - 1) / field_norm  # E
+    vec_boundaries[3] = (min(x - head[0], y - head[1]) - 1) / field_norm  # SE
+    vec_boundaries[4] = (x - head[0] - 1) / field_norm  # S
+    vec_boundaries[5] = (min(x - head[0], y - head[1]) - 1) / field_norm  # SW
+    vec_boundaries[6] = head[1] / field_norm  # W
+    vec_boundaries[7] = min(head[0], head[1]) / field_norm
+
+    # boundary distance activations
+    activations = np.append(activations, vec_boundaries)
+
+    # distance to snek N, NE, E, SE, S, SW, W, NW
+    # if snek not in path of compass then = 0
+    vec_snek = np.zeros((8, 1))
+    a, b = head[0], head[1]
+    # N
+    counter = 0
+    vec_snek[0] = 0
+    for i in range(head[0]):
+        counter += 1
+        if field[a - counter, b] == 1:
+            vec_snek[0] = counter / field_norm
+            break
+    # NE
+    counter = 0
+    vec_snek[1] = 0
+    for i in range(min(head[0], y - head[1]) - 1):
+        counter += 1
+        if field[a - counter, b + counter] == 1:
+            vec_snek[1] = counter / field_norm
+            break
+    # E
+    counter = 0
+    vec_snek[2] = 0
+    for i in range(y - head[1] - 1):
+        counter += 1
+        if field[a, b + counter] == 1:
+            vec_snek[2] = counter / field_norm
+            break
+    # SE
+    counter = 0
+    vec_snek[3] = 0
+    for i in range(min(x - head[0], y - head[1]) - 1):
+        counter += 1
+        if field[a + counter, b + counter] == 1:
+            vec_snek[3] = counter / field_norm
+            break
+    # S
+    counter = 0
+    vec_snek[4] = 0
+    for i in range(x - head[0] - 1):
+        counter += 1
+        if field[a + counter, b] == 1:
+            vec_snek[4] = counter / field_norm
+            break
+    # SW
+    counter = 0
+    vec_snek[5] = 0
+    for i in range(min(x - head[0], head[1]) - 1):
+        counter += 1
+        if field[a + counter, b - counter] == 1:
+            vec_snek[5] = counter / field_norm
+            break
+    # W
+    counter = 0
+    vec_snek[6] = 0
+    for i in range(head[1]):
+        counter += 1
+        if field[a, b - counter] == 1:
+            vec_snek[6] = counter / field_norm
+            break
+    # NW
+    counter = 0
+    vec_snek[7] = 0
+    for i in range(min(head[0], head[1]) - 1):
+        if field[a - counter, b - counter] == 1:
+            vec_snek[7] = counter / field_norm
+            break
+
+    activations = np.append(activations, vec_snek)
+
+    # distance to food (2 inputs)
+    vec_food = np.zeros((2, 1))
+    a, b = head[0], head[1]
+    fx, fy = food[0], food[1]
+
+    vec_food[0] = (a - fx) / field_norm
+    vec_food[1] = (b - fy) / field_norm
+
+    # get activations for segregated neurons
+    activations = np.append(activations, vec_food)
+
+    # get direction activations
+    vec_direction = np.zeros((4, 1))
+    vec_direction[direction] = 1.0
+    activations = np.append(activations, vec_direction)
+
+    # make activations (20,1) and segregated input layer (2,1)
+    activations = activations[..., np.newaxis]
+
+    # process activations through neural network
+    process = [activations]
+    zs = []
+    for b, w in zip(biases, weights):
+        z = np.dot(w, activations) + b
+        zs.append(z)
+        activations = sigmoid(z)
+        process.append(activations)
+
+
+    # final activation layer values
+    final_act = process[-1]
+    # get index of max value
+    new_direction = np.argmax(final_act)
+
+    return new_direction
+
+
+def create_network(layers):  # pass list object
+    # activation layer needs to be 28
+    # output layer needs to be 4
+    global num_layers, biases, weights
+
+    # layers = [20,12,12,4]
+    num_layers = len(layers)
+    biases = [np.random.randn(y, 1) for y in layers[1:]]
+    weights = [np.random.randn(y, x) for x, y in zip(layers[:-1], layers[1:])]
+
+    return (biases, weights)
+
+
+def sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-z))
+
+
+def snakes(individuals, network, elites, fitness_stack, optimum, gen):
+    global new
+    # new list to save all children which are then evaluated by non-dominated selection
+    new = []
+
+    @parfor(range(individuals), (elites,))
+    def mutator(individuals, elites):
+        global new
+        # for n in range(individuals):
+        if gen == 0:
+            net = create_network(network)
+            biases, weights = net[0], net[1]
+            score, steps = update(net)
+            # fit = fit_calc(score, steps)
+        else:
+            dist = np.random.poisson(3, len(elites))
+            offspring = mutate_parent(random.choices(elites, weights=dist), random.choices(elites, weights=dist))
+            biases, weights = offspring[0], offspring[1]
+            score, steps = update(offspring)
+            # fit = fit_calc(score, steps)
+
+        # non-dominated sorting implementation
+        # first gather all individuals together
+        return [[biases, weights], [score, steps]]
+        # new.append([[biases, weights, seg_weights], [score, steps]])
+    new = mutator
+
+    # for i in range(len(elites)):
+    #     if i % 2 == 1:
+    #         elites[i].pop()
+
+    for x in new:
+        elites.append(x)
+
+    elite_phens = [elites[x][0] for x in range(len(elites))]
+    elite_fits = [elites[x][1] for x in range(len(elites))]
+
+    # return pareto efficient points
+    # sort points by decreasing sum of coordinates
+    pts = np.array(elite_fits)
+    pts_indices = [pts.sum(1).argsort()[::-1]]
+    pts = pts[pts_indices]
+    # initalize a boolean mask for undominated points
+    # to avoid creating copies each iteration
+    undoms = np.ones(pts.shape[0], dtype=bool)
+    undom_indices = []
+    for i in range(pts.shape[0]):
+        # process each point in turn
+        n = pts.shape[0]
+        if i >= n:
+            break
+        # find all points not dominated by i
+        # since points are sorted by coordinate sum
+        # i cannot dominate any points in 1,...,i-1
+        undoms[i+1:n] = (pts[i+1:] >= pts[i]).any(1)
+        # keep points undominated so far
+        pts = pts[undoms[:n]]
+        # keep undominated indices
+        undom_indices.append(list(pts_indices)[0][i])
+
+    elites = []
+    if len(undom_indices) > 1:
+        for x in range(len(undom_indices)):
+            elites.append([elite_phens[undom_indices[x]], elite_fits[undom_indices[x]]])
+    else:
+        for x in range(10):
+            elite_idx = pts_indices[0][x]
+            elites.append([elite_phens[elite_idx], elite_fits[elite_idx]])
+
+
+    while len(elites) > 100:
+        elites.pop()
+
+    # get optimums
+    optimum = sum(elites[0][1])
+
+
+    # record best score with biases and weights
+    # gen_record = open(r'C:\Users\bryce\Desktop\projects\snek_NNs/gen_record.txt', 'a')
+    # gen_record.write("\nGeneration {0}\nBest fitness {1}\nBiases {2}\nWeights {3}\nSeg_Weights {4}".format(
+    #     gen, optimum, elites[opt_idx][0], elites[opt_idx][1], elites[opt_idx][2]))
+    # gen_record.close()
+
+    # print("Average fitness of elites: {}".format(fit_avg))
+    r = 0
+    opt_pairs = []
+    while r < 9:
+        if r > len(elites) - 1:
+            break
+        opt_pairs.append(elites[r][1])
+        r += 1
+
+    print("Sample of optimum decompositions {}".format(opt_pairs))
+    print("Number of elites: {}".format(len(elites)))
+
+    return optimum, elites, fitness_stack
+
+
+def mutate_parent(parent1, parent2):
+    parent1 = parent1[0]
+    parent2 = parent2[0]
+    # crossover
+    biases1 = parent1[0][0]
+    weights1 = parent1[0][1]
+
+    biases2 = parent2[0][0]
+    weights2 = parent2[0][1]
+
+    # mutation rate increases with redundant outcomes
+    mut_rate = 10
+
+    # mutate biases 1 by 1
+    for f in range(len(biases1)):
+        for x in range(len(biases1[f])):
+            if random.randint(0, 100) < 50:
+                biases1[f][x] = biases2[f][x]
+            # mutate
+            if random.randint(0, 100) < mut_rate:
+                # n_max = min(1.25 * biases1[f][x], 1.0)
+                # n = random.uniform(.75 * biases1[f][x], n_max)
+                n = random.uniform(0,1)
+                biases1[f][x] = n
+
+    # mutate weights
+    for f in range(len(weights1)):
+        for x in range(len(weights1[f])):
+            for s in range(len(weights1[f][x])):
+                if random.randint(0, 100) < 50:
+                    weights1[f][x][s] = weights2[f][x][s]
+                # mutate
+                if random.randint(0, 100) < mut_rate:
+                    # n_max = min(1.25 * weights1[f][x][s], 1.0)
+                    # n = random.uniform(.75 * weights1[f][x][s], n_max)
+                    n = random.uniform(0, 1)
+                    weights1[f][x][s] = n
+
+    return biases1, weights1
+
+
+def prob_dist(elites):
+    # get power law distribution of probabilities for selection
+    probs = np.random.power(1,len(elites))
+    probs1 = []
+    for prob in probs:
+        prob = prob/sum(probs)
+        probs1.append(prob)
+    return probs1
+
+
+def fit_calc(score, steps):
+    # calculate fitness of each snake
+    if steps == 0:
+        return 0
+
+    fit = score/steps
+    return fit
+
+
+def genetic_selector(individuals, generations):
+    gen = 0
+    network = [22, 16, 16, 4]
+    elites = []
+    fitness_stack = []
+    optimum = 0
+
+    while gen < generations:
+        optimum, elites, fitness_stack = snakes(individuals, network, elites, fitness_stack, optimum, gen)
+        print("Generation {0}\nOptimum {1}".format(gen, optimum))
+        gen += 1
+
+if __name__ == '__main__':
+    genetic_selector(5000, 2000)
+
+
+
+
+
